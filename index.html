@@ -346,6 +346,11 @@ function clearStage(){ const s = stage(); while (s.firstChild) s.removeChild(s.f
    ========================================================================= */
 function go(screen) {
   stopFlow();
+  // write画面を離れる時は canvas のGPUバッキングストアを即時解放する
+  // （iPad Safari で解放待ちの canvas がコンポジタのメモリ圧迫→黒タイル化を誘発するため）
+  if (state.screen === 'write' && screen !== 'write' && canvasEl) {
+    canvasEl.width = 0; canvasEl.height = 0; canvasEl = null;
+  }
   state.screen = screen;
   render();
   if (screen === 'write') resetWrite();
@@ -356,8 +361,18 @@ function render() {
   const fn = { home: Home, select: Select, grid: Grid, write: Write, clear: Clear }[state.screen];
   const s = stage();
   s.appendChild(fn());
-  // Safari等のGPU合成で前画面の黒タイルが残るのを防ぐため、切替時に再描画を強制する
-  void s.offsetHeight;
+  forceCompositorRepaint();
+}
+// iPad Safari 対策：画面切替後に背景が黒くなる（transformされた巨大レイヤーの
+// GPUタイルが再ラスタライズされず、未初期化=黒のまま表示される）ことがある。
+// reflow強制(offsetHeight)ではレイヤーが作り直されないため、displayを同期的に
+// 切り替えて合成レイヤーごと再構築させる。同一タスク内で戻すので描画は挟まらず
+// ちらつかない。
+function forceCompositorRepaint() {
+  const scaler = document.getElementById('scaler');
+  scaler.style.display = 'none';
+  void scaler.offsetHeight;
+  scaler.style.display = '';
 }
 
 /* =========================================================================
@@ -754,6 +769,9 @@ function fitStage() {
   scaler.style.transform = 'scale(' + Math.min(sx, sy) + ')';
 }
 window.addEventListener('resize', fitStage);
+// タブ復帰・アプリ切替からの復帰でもGPUタイルが破棄され黒くなることがあるため再構築する
+window.addEventListener('pageshow', forceCompositorRepaint);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) forceCompositorRepaint(); });
 fitStage();
 render();
 </script>
