@@ -502,7 +502,11 @@ function Grid() {
         const style = sel
           ? base+`background:${T.main};color:#fff;animation:pulse 1.6s ease-in-out infinite;`
           : base+'background:#fff;border:2px solid #E1E9F1;color:#5A5246;';
-        return h('div',{class:'clickable',style,onClick:()=>{state.sel=cell.idx;render();}},[conv(cell.k),star]);
+        // 選択済みの文字をもう一度タップしたら、そのまま「かく」画面へ
+        return h('div',{class:'clickable',style,onClick:()=>{
+          if (state.sel === cell.idx) { go('write'); }
+          else { state.sel = cell.idx; render(); }
+        }},[conv(cell.k),star]);
       }),
     ])));
   const right = h('div',{style:'flex:1;'},[
