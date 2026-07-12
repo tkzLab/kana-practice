@@ -363,11 +363,10 @@ function render() {
   s.appendChild(fn());
   forceCompositorRepaint();
 }
-// iPad Safari 対策：画面切替後に背景が黒くなる（transformされた巨大レイヤーの
-// GPUタイルが再ラスタライズされず、未初期化=黒のまま表示される）ことがある。
-// reflow強制(offsetHeight)ではレイヤーが作り直されないため、displayを同期的に
-// 切り替えて合成レイヤーごと再構築させる。同一タスク内で戻すので描画は挟まらず
-// ちらつかない。
+// 旧iPad Safari対策の名残（transformモードのフォールバック用に残置）。
+// 2026-07-12 実機検証で、このdisplay同期トグルでは黒タイルは解消しないと判明
+// （同一タスク内で戻すためコンポジタに変化が届かない）。根本対策は fitStage の
+// zoom スケーリング。害はなく transform フォールバック時の保険として呼び続ける。
 function forceCompositorRepaint() {
   dbg('repaintA');
   const scaler = document.getElementById('scaler');
@@ -698,6 +697,13 @@ function resetWrite() {
 /* 描画キャンバス */
 function penColor(){ return PEN_COLORS[(penIdx++) % PEN_COLORS.length]; }
 function wipeCanvas(){ if (canvasEl) canvasEl.getContext('2d').clearRect(0,0,canvasEl.width,canvasEl.height); }
+// zoom / transform どちらのスケーリング下でも正しい座標換算
+// （offsetX/Y は zoom 下の挙動にブラウザ差があるため使わない）
+function canvasPos(e){
+  const r = canvasEl.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * canvasEl.width / r.width,
+           y: (e.clientY - r.top) * canvasEl.height / r.height };
+}
 function down(e){
   if (!canvasEl) return;
   try { canvasEl.setPointerCapture(e.pointerId); } catch(_){}
@@ -705,13 +711,15 @@ function down(e){
   ctx.lineWidth = 16; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.strokeStyle = penColor();
   ctx.beginPath();
-  ctx.moveTo(e.offsetX, e.offsetY);
+  const p = canvasPos(e);
+  ctx.moveTo(p.x, p.y);
   drawing = true;
 }
 function move(e){
   if (!drawing) return;
   const ctx = canvasEl.getContext('2d');
-  ctx.lineTo(e.offsetX, e.offsetY);
+  const p = canvasPos(e);
+  ctx.lineTo(p.x, p.y);
   ctx.stroke();
 }
 function up(){ drawing = false; }
@@ -766,16 +774,21 @@ function Clear() {
 /* =========================================================================
    ステージのスケーリング & 起動
    ========================================================================= */
-let dbgUseZoom = false; // デバッグ実験C: transform scale の代わりに zoom で縮尺（合成レイヤー化を避ける）
+// スケーリング方式: 対応ブラウザでは zoom を使う。zoom はレイアウトに効くため
+// transform:scale のような巨大合成レイヤーを作らず、iPad Safari で「GPUタイルが
+// 黒いまま残る」問題が構造的に起きない（2026-07-12 実機検証: displayトグルによる
+// レイヤー再構築A/Bでは黒が消えず、zoom切替のみで解消した）。
+// zoom 非対応ブラウザ（Firefox 126未満）のみ transform scale にフォールバック。
+let useZoom = ('zoom' in document.documentElement.style);
 function fitStage() {
   const scaler = document.getElementById('scaler');
   const pad = 16;
   const sx = (window.innerWidth - pad) / 1280;
   const sy = (window.innerHeight - pad) / 800;
   const s = Math.min(sx, sy);
-  if (dbgUseZoom) { scaler.style.transform = 'none'; scaler.style.zoom = s; }
+  if (useZoom) { scaler.style.transform = 'none'; scaler.style.zoom = s; }
   else { scaler.style.zoom = ''; scaler.style.transform = 'scale(' + s + ')'; }
-  dbg('fit ' + window.innerWidth + 'x' + window.innerHeight + ' s=' + s.toFixed(3) + (dbgUseZoom ? ' zoom' : ''));
+  dbg('fit ' + window.innerWidth + 'x' + window.innerHeight + ' s=' + s.toFixed(3) + (useZoom ? ' zoom' : ' transform'));
 }
 // 回転・リサイズで transform のスケール値が変わると、旧スケールで
 // ラスタライズ済みのGPUタイル外が未初期化=黒のまま残るため、再構築も行う
@@ -826,7 +839,7 @@ if (DEBUG) {
     sc.style.display = 'none';
     requestAnimationFrame(() => requestAnimationFrame(() => { sc.style.display = ''; dbg('btn B restore'); }));
   });
-  btn('C:zoom切替', () => { dbgUseZoom = !dbgUseZoom; dbg('btn C zoom=' + dbgUseZoom); fitStage(); });
+  btn('C:zoom⇔transform', () => { useZoom = !useZoom; dbg('btn C zoom=' + useZoom); fitStage(); });
   document.body.appendChild(panel);
   dbg('debug on dpr=' + devicePixelRatio);
 }
