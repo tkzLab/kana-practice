@@ -697,16 +697,35 @@ function resetWrite() {
 /* 描画キャンバス */
 function penColor(){ return PEN_COLORS[(penIdx++) % PEN_COLORS.length]; }
 function wipeCanvas(){ if (canvasEl) canvasEl.getContext('2d').clearRect(0,0,canvasEl.width,canvasEl.height); }
-// zoom / transform どちらのスケーリング下でも正しい座標換算
-// （offsetX/Y は zoom 下の挙動にブラウザ差があるため使わない）
+// zoom / transform どちらのスケーリング下でも正しい座標換算。
+// zoom 下のポインタ座標はブラウザで座標系が異なる：
+//  - 標準化済み(Chrome128+等): clientX・rect とも視覚px で一致（offsetX == clientX-rect.left）
+//  - 旧WebKit: イベント座標に zoom を織り込むため offsetX がレイアウト局所px
+//    （= canvasビットマップ座標そのもの）になり、clientX-rect.left とズレる
+// そこでイベントごとに両者を比べ、同一空間なら rect 比例換算、
+// 食い違っていれば offsetX 系を採用する（?debug のDボタンで強制切替可）。
+let posMode = 'auto'; // 'auto' | 'rect' | 'offset'
 function canvasPos(e){
   const r = canvasEl.getBoundingClientRect();
-  return { x: (e.clientX - r.left) * canvasEl.width / r.width,
-           y: (e.clientY - r.top) * canvasEl.height / r.height };
+  const dx = e.clientX - r.left, dy = e.clientY - r.top;
+  const sameSpace = Math.abs(e.offsetX - dx) <= 2 && Math.abs(e.offsetY - dy) <= 2;
+  if (posMode === 'rect' || (posMode === 'auto' && sameSpace))
+    return { x: dx * canvasEl.width / r.width, y: dy * canvasEl.height / r.height };
+  // rect が視覚px なら offsetX はレイアウト局所px＝ビットマップ座標そのもの。
+  // rect までレイアウトpx のブラウザなら offsetX は視覚局所px なので実効倍率で割る。
+  const rectIsVisual = Math.abs(r.width - canvasEl.width * curScale) < Math.abs(r.width - canvasEl.width);
+  const k = rectIsVisual ? 1 : 1 / (curScale || 1);
+  return { x: e.offsetX * k, y: e.offsetY * k };
 }
 function down(e){
   if (!canvasEl) return;
   try { canvasEl.setPointerCapture(e.pointerId); } catch(_){}
+  if (DEBUG) {
+    const r = canvasEl.getBoundingClientRect();
+    dbg('pd c=' + Math.round(e.clientX) + ',' + Math.round(e.clientY)
+      + ' o=' + Math.round(e.offsetX) + ',' + Math.round(e.offsetY)
+      + ' rl=' + Math.round(r.left) + ' rw=' + Math.round(r.width) + ' m=' + posMode);
+  }
   const ctx = canvasEl.getContext('2d');
   ctx.lineWidth = 16; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.strokeStyle = penColor();
@@ -780,12 +799,14 @@ function Clear() {
 // レイヤー再構築A/Bでは黒が消えず、zoom切替のみで解消した）。
 // zoom 非対応ブラウザ（Firefox 126未満）のみ transform scale にフォールバック。
 let useZoom = ('zoom' in document.documentElement.style);
+let curScale = 1; // 現在の実効倍率（canvasPos の座標系判定で使う）
 function fitStage() {
   const scaler = document.getElementById('scaler');
   const pad = 16;
   const sx = (window.innerWidth - pad) / 1280;
   const sy = (window.innerHeight - pad) / 800;
   const s = Math.min(sx, sy);
+  curScale = s;
   if (useZoom) { scaler.style.transform = 'none'; scaler.style.zoom = s; }
   else { scaler.style.zoom = ''; scaler.style.transform = 'scale(' + s + ')'; }
   dbg('fit ' + window.innerWidth + 'x' + window.innerHeight + ' s=' + s.toFixed(3) + (useZoom ? ' zoom' : ' transform'));
@@ -840,6 +861,7 @@ if (DEBUG) {
     requestAnimationFrame(() => requestAnimationFrame(() => { sc.style.display = ''; dbg('btn B restore'); }));
   });
   btn('C:zoom⇔transform', () => { useZoom = !useZoom; dbg('btn C zoom=' + useZoom); fitStage(); });
+  btn('D:座標モード', () => { posMode = posMode === 'auto' ? 'rect' : posMode === 'rect' ? 'offset' : 'auto'; dbg('btn D mode=' + posMode); });
   document.body.appendChild(panel);
   dbg('debug on dpr=' + devicePixelRatio);
 }
