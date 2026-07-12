@@ -772,7 +772,13 @@ function fitStage() {
   const sy = (window.innerHeight - pad) / 800;
   scaler.style.transform = 'scale(' + Math.min(sx, sy) + ')';
 }
-window.addEventListener('resize', fitStage);
+// 回転・リサイズで transform のスケール値が変わると、旧スケールで
+// ラスタライズ済みのGPUタイル外が未初期化=黒のまま残るため、再構築も行う
+function onViewportChange(){ fitStage(); forceCompositorRepaint(); }
+window.addEventListener('resize', onViewportChange);
+// iPad Safari は orientationchange 直後の innerWidth/Height が回転前の値のことが
+// あるため、少し遅らせてもう一度合わせる
+window.addEventListener('orientationchange', () => setTimeout(onViewportChange, 350));
 // タブ復帰・アプリ切替からの復帰でもGPUタイルが破棄され黒くなることがあるため再構築する
 window.addEventListener('pageshow', forceCompositorRepaint);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) forceCompositorRepaint(); });
